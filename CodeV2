@@ -1,0 +1,300 @@
+import tkinter as tk
+from tkinter import messagebox
+import itertools
+
+class Gate:
+    def __init__(self, typ, x, y):
+        self.type = typ
+        self.x = x
+        self.y = y
+        self.value = False  # только для IN и OUT
+        self.inputs = []    # временные входные значения при расчёте
+        self.width = 70
+        self.height = 40
+
+    def compute(self):
+        if self.type == 'IN':
+            return self.value
+        elif self.type == 'OUT':
+            return self.inputs[0] if self.inputs else False
+        elif self.type == 'NOT':
+            return not self.inputs[0]
+        elif self.type == 'AND':
+            return all(self.inputs)
+        elif self.type == 'OR':
+            return any(self.inputs)
+        elif self.type == 'XOR':
+            return sum(self.inputs) % 2 == 1
+        elif self.type == 'NAND':
+            return not all(self.inputs)
+        elif self.type == 'NOR':
+            return not any(self.inputs)
+        return False
+
+class Connection:
+    def __init__(self, src, dst):
+        self.src = src
+        self.dst = dst
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Симулятор логических вентилей")
+        self.root.geometry("1200x700")
+        self.root.configure(bg="lightgray")
+
+        self.gates = []
+        self.connections = []
+        self.drag_gate = None
+        self.drag_offset = (0, 0)
+        self.connect_mode = False
+        self.connect_start = None
+
+        # Левая панель
+        left = tk.Frame(root, bg="white", width=200)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+        left.pack_propagate(False)
+
+        tk.Label(left, text="Элементы:", font=("Arial", 12, "bold")).pack(pady=10)
+
+        for name in ['IN', 'OUT', 'AND', 'OR', 'NOT', 'XOR', 'NAND', 'NOR']:
+            tk.Button(left, text=name, command=lambda n=name: self.add_gate(n)).pack(pady=3)
+
+        tk.Label(left, text="Действия:", font=("Arial", 12, "bold")).pack(pady=(20, 5))
+        tk.Button(left, text="Вычислить", command=self.calc).pack(pady=3)
+        tk.Button(left, text="Таблица истинности", command=self.show_table).pack(pady=3)
+        tk.Button(left, text="Очистить всё", command=self.clear).pack(pady=3)
+        tk.Button(left, text="Режим соединения", command=self.toggle_conn).pack(pady=3)
+        tk.Button(left, text="Удалить элемент (ПКМ)", state="disabled", fg="gray").pack(pady=3)  # подсказка
+
+        self.status = tk.Label(left, text="Готов", fg="green")
+        self.status.pack(side=tk.BOTTOM, pady=10)
+
+        self.canvas = tk.Canvas(root, bg="white", scrollregion=(0, 0, 2000, 2000))
+        self.canvas.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # События
+        self.canvas.bind("<Button-1>", self.left_click)
+        self.canvas.bind("<B1-Motion>", self.drag)
+        self.canvas.bind("<ButtonRelease-1>", self.release)
+        self.canvas.bind("<Double-Button-1>", self.dblclick)
+        self.canvas.bind("<Button-3>", self.right_click) 
+
+        # Пример схемы
+        self.add_gate('IN', 100, 100)
+        self.add_gate('IN', 100, 180)
+        self.add_gate('AND', 250, 140)
+        self.add_gate('OUT', 400, 140)
+        self.connections = [
+            Connection(self.gates[0], self.gates[2]),
+            Connection(self.gates[1], self.gates[2]),
+            Connection(self.gates[2], self.gates[3])
+        ]
+        self.redraw()
+
+    def add_gate(self, typ, x=None, y=None):
+        if x is None:
+            x = 300
+            y = 200
+        g = Gate(typ, x, y)
+        self.gates.append(g)
+        self.redraw()
+        self.status.config(text=f"Добавлен {typ}")
+
+    def delete_gate(self, gate):
+        self.connections = [c for c in self.connections if c.src != gate and c.dst != gate]
+        self.gates.remove(gate)
+        self.redraw()
+        self.status.config(text=f"Удалён элемент {gate.type}")
+
+    def redraw(self):
+        self.canvas.delete("all")
+
+        # Провода
+        for c in self.connections:
+            x1 = c.src.x + c.src.width
+            y1 = c.src.y + c.src.height // 2
+            x2 = c.dst.x
+            y2 = c.dst.y + c.dst.height // 2
+            self.canvas.create_line(x1, y1, x2, y2, arrow=tk.LAST, fill="blue", width=2)
+
+        # Вентили
+        for g in self.gates:
+            if g.type == 'IN':
+                color = "lightgreen"
+            elif g.type == 'OUT':
+                color = "pink"
+            elif g.type == 'NOT':
+                color = "orange"
+            else:
+                color = "lightblue"
+
+            self.canvas.create_rectangle(
+                g.x, g.y, g.x + g.width, g.y + g.height,
+                fill=color, outline="black"
+            )
+            self.canvas.create_text(
+                g.x + g.width // 2, g.y + g.height // 2,
+                text=g.type, font=("Arial", 9)
+            )
+
+            if g.type in ('IN', 'OUT'):
+                val = "1" if g.value else "0"
+                col = "darkgreen" if g.value else "red"
+                self.canvas.create_text(g.x + g.width - 12, g.y + 12, text=val, fill=col, font=("Arial", 10, "bold"))
+
+            # Точки подключения
+            if g.type != 'IN':
+                ix, iy = g.x, g.y + g.height // 2
+                self.canvas.create_oval(ix-5, iy-5, ix+5, iy+5, fill="red", outline="black")
+            if g.type != 'OUT':
+                ox, oy = g.x + g.width, g.y + g.height // 2
+                self.canvas.create_oval(ox-5, oy-5, ox+5, oy+5, fill="green", outline="black")
+
+    def find_gate(self, x, y):
+        for g in self.gates:
+            if g.x <= x <= g.x + g.width and g.y <= y <= g.y + g.height:
+                return g
+        return None
+
+    def left_click(self, event):
+        x, y = event.x, event.y
+
+        if self.connect_mode:
+            gate = self.find_gate(x, y)
+            if gate:
+                if self.connect_start is None:
+                    if gate.type != 'OUT':
+                        self.connect_start = gate
+                        self.status.config(text="Выберите вход (красную точку)...")
+                else:
+                    if gate.type != 'IN' and gate != self.connect_start:
+                        self.connections.append(Connection(self.connect_start, gate))
+                        self.connect_start = None
+                        self.connect_mode = False
+                        self.redraw()
+                        self.status.config(text="✓ Соединено!")
+                    else:
+                        self.connect_start = None
+                        self.connect_mode = False
+                        self.status.config(text="✗ Отменено")
+            return
+
+        # Клик по выходу (зелёная точка)
+        for g in self.gates:
+            if g.type != 'OUT':
+                ox, oy = g.x + g.width, g.y + g.height // 2
+                if abs(x - ox) < 10 and abs(y - oy) < 10:
+                    self.connect_start = g
+                    self.connect_mode = True
+                    self.status.config(text="Выберите вход...")
+                    return
+
+        # Клик по входу (красная точка)
+        for g in self.gates:
+            if g.type != 'IN':
+                ix, iy = g.x, g.y + g.height // 2
+                if abs(x - ix) < 10 and abs(y - iy) < 10:
+                    if self.connect_start and self.connect_start != g:
+                        self.connections.append(Connection(self.connect_start, g))
+                        self.connect_start = None
+                        self.redraw()
+                        self.status.config(text="✓ Соединено!")
+                    return
+
+        # Перетаскивание вентиля
+        gate = self.find_gate(x, y)
+        if gate:
+            self.drag_gate = gate
+            self.drag_offset = (x - gate.x, y - gate.y)
+
+    def right_click(self, event):
+        gate = self.find_gate(event.x, event.y)
+        if gate:
+            confirm = messagebox.askyesno("Удаление", f"Удалить элемент '{gate.type}'?")
+            if confirm:
+                self.delete_gate(gate)
+        else:
+            self.status.config(text="Нет элемента под курсором")
+
+    def drag(self, event):
+        if self.drag_gate:
+            self.drag_gate.x = event.x - self.drag_offset[0]
+            self.drag_gate.y = event.y - self.drag_offset[1]
+            self.redraw()
+
+    def release(self, event):
+        self.drag_gate = None
+
+    def dblclick(self, event):
+        gate = self.find_gate(event.x, event.y)
+        if gate and gate.type == 'IN':
+            gate.value = not gate.value
+            self.redraw()
+            self.status.config(text=f"IN изменён на {int(gate.value)}")
+
+    def calc(self):
+        for g in self.gates:
+            if g.type != 'IN':
+                g.inputs = []
+
+        for conn in self.connections:
+            value = conn.src.compute()
+            conn.dst.inputs.append(value)
+
+        for g in self.gates:
+            if g.type == 'OUT':
+                g.value = g.compute()
+
+        self.redraw()
+        self.status.config(text="✅ Вычислено!")
+
+    def show_table(self):
+        ins = [g for g in self.gates if g.type == 'IN']
+        outs = [g for g in self.gates if g.type == 'OUT']
+
+        if not ins:
+            messagebox.showinfo("Ошибка", "Нет входов (IN)!")
+            return
+        if len(ins) > 5:
+            messagebox.showwarning("Много входов", "Таблица поддерживает до 5 входов.")
+            return
+
+        win = tk.Toplevel()
+        win.title("Таблица истинности")
+        win.geometry("500x400")
+        text = tk.Text(win, font=("Courier", 10))
+        text.pack(fill=tk.BOTH, expand=True)
+
+        headers = [f"IN{i+1}" for i in range(len(ins))] + [f"OUT{i+1}" for i in range(len(outs))]
+        text.insert("end", " | ".join(f"{h:>4}" for h in headers) + "\n")
+        text.insert("end", "-" * (len(headers) * 6) + "\n")
+
+        for bits in itertools.product([False, True], repeat=len(ins)):
+            for g, val in zip(ins, bits):
+                g.value = val
+            self.calc()
+            row = [str(int(v)) for v in bits] + [str(int(g.value)) for g in outs]
+            text.insert("end", " | ".join(f"{v:>4}" for v in row) + "\n")
+
+        text.config(state="disabled")
+
+    def clear(self):
+        self.gates = []
+        self.connections = []
+        self.redraw()
+        self.status.config(text="🗑 Всё очищено")
+
+    def toggle_conn(self):
+        self.connect_mode = not self.connect_mode
+        if self.connect_mode:
+            self.connect_start = None
+            self.status.config(text="🔗 Режим соединения ВКЛ")
+        else:
+            self.connect_start = None
+            self.status.config(text="Режим соединения ВЫКЛ")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = App(root)
+    root.mainloop()
